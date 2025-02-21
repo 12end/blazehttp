@@ -86,28 +86,28 @@ func (r *Response) String() string {
 	return fmt.Sprintf("Response status code: %s http version: %s headers number: %d body length: %d\nResponse Line: %s\n", string(r.StatusCode), r.Version, headerCnt, bodyLength, string(r.StatusLine))
 }
 
-func (r *Response) ReadConn(conn net.Conn) (err error) {
+func (r *Response) ReadConn(conn net.Conn) (resp []byte, err error) {
 	buf := new(bytes.Buffer)
-	b := make([]byte, 1024)
+	resp = make([]byte, 1024)
 
 	for {
-		nread, err := conn.Read(b)
+		nread, err := conn.Read(resp)
 		if err != nil {
 			break
 		}
 		if nread == 0 {
 			break
 		}
-		buf.Write(b)
-		if nread < cap(b) {
+		buf.Write(resp)
+		if nread < cap(resp) {
 			break
 		}
 	}
 
 	_, err = r.ReadFrom(buf)
 	if err != nil {
-		return err
+		return resp, err
 	}
 
-	return nil
+	return resp, nil
 }

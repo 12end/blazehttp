@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -28,6 +29,7 @@ var (
 	c                 = 10   // default 10 concurrent workers
 	mHost             string // modify host header
 	requestPerSession bool   // send request per session
+	blockRegexp       string
 )
 
 func init() {
@@ -40,6 +42,7 @@ func init() {
 	flag.StringVar(&glob, "g", "", "glob expression, example: *.http")
 	flag.IntVar(&timeout, "timeout", 1000, "connection timeout, default 1000 ms")
 	flag.StringVar(&mHost, "H", "", "modify host header")
+	flag.StringVar(&blockRegexp, "b", "", "blocked keyword regexp")
 	flag.BoolVar(&requestPerSession, "rps", true, "send request per session")
 	flag.Parse()
 	if url, err := url.Parse(target); err != nil || url.Scheme == "" || url.Host == "" {
@@ -51,6 +54,10 @@ func init() {
 func main() {
 	var addr string
 	var isHttps bool
+	var err error
+	var isWaf bool
+	var blockStatusCode int
+	var blockKeyword *regexp.Regexp
 
 	if strings.HasPrefix(target, "http") {
 		u, _ := url.Parse(target)
@@ -59,14 +66,24 @@ func main() {
 		}
 		addr = u.Host
 	}
-
-	isWaf, blockStatusCode, err := utils.GetWafBlockStatusCode(target, mHost)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+	if blockRegexp == "" {
+		isWaf, blockStatusCode, err = utils.GetWafBlockStatusCode(target, mHost)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		if !isWaf {
+			fmt.Println("目标网站未开启waf")
+			os.Exit(1)
+		}
+	} else {
+		// 维持默认，优先匹配blockRegexp，status_code将不被用来匹配
+		isWaf = true
+		blockStatusCode = 403
 	}
-	if !isWaf {
-		fmt.Println("目标网站未开启waf")
+	blockKeyword, err = regexp.Compile(blockRegexp)
+	if err != nil {
+		fmt.Println("invalid block keyword regexp")
 		os.Exit(1)
 	}
 
@@ -117,6 +134,7 @@ func main() {
 		isHttps,
 		fileList,
 		blockStatusCode,
+		blockKeyword,
 		worker.WithConcurrence(c),
 		worker.WithReqHost(mHost),
 		worker.WithReqPerSession(requestPerSession),

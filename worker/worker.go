@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -28,12 +29,13 @@ type Worker struct {
 	result        *Result
 	progressBar   Progress
 
-	addr            string // target addr
-	isHttps         bool   // is https
-	timeout         int    // connection timeout
-	blockStatusCode int    // block status code
-	reqHost         string // request host of header
-	reqPerSession   bool   // request per session
+	addr            string         // target addr
+	isHttps         bool           // is https
+	timeout         int            // connection timeout
+	blockStatusCode int            // block status code
+	blockKeyword    *regexp.Regexp // block keyword
+	reqHost         string         // request host of header
+	reqPerSession   bool           // request per session
 	useEmbedFS      bool
 	resultCh        chan *Result
 }
@@ -91,6 +93,7 @@ func NewWorker(
 	isHttps bool,
 	fileList []string,
 	blockStatusCode int,
+	blockKeyword *regexp.Regexp,
 	options ...WorkerOption,
 ) *Worker {
 	w := &Worker{
@@ -103,6 +106,7 @@ func NewWorker(
 		addr:            addr,
 		isHttps:         isHttps,
 		timeout:         1000, // 1000ms
+		blockKeyword:    blockKeyword,
 		blockStatusCode: blockStatusCode,
 
 		jobs:          make(chan *Job),
@@ -225,7 +229,8 @@ func (w *Worker) runWorker() {
 			}
 
 			rsp := new(blazehttp.Response)
-			if err = rsp.ReadConn(*conn); err != nil {
+			var resp []byte
+			if resp, err = rsp.ReadConn(*conn); err != nil {
 				job.Result.Err = fmt.Sprintf("read poc file: %s response, error: %s", filePath, err)
 				return
 			}
@@ -238,8 +243,15 @@ func (w *Worker) runWorker() {
 
 			code := rsp.GetStatusCode()
 			job.Result.StatusCode = code
-			if code != w.blockStatusCode {
-				job.Result.IsPass = true
+			// keyword不为空时候，优先匹配keyword
+			if w.blockKeyword != nil {
+				if !w.blockKeyword.Match(resp) {
+					job.Result.IsPass = true
+				}
+			} else {
+				if code != w.blockStatusCode {
+					job.Result.IsPass = true
+				}
 			}
 			job.Result.TimeCost = elap
 		}()
