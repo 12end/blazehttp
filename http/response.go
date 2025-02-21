@@ -1,11 +1,14 @@
 package http
 
 import (
+	"bufio"
 	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
+	"strings"
 )
 
 type Response struct {
@@ -86,28 +89,115 @@ func (r *Response) String() string {
 	return fmt.Sprintf("Response status code: %s http version: %s headers number: %d body length: %d\nResponse Line: %s\n", string(r.StatusCode), r.Version, headerCnt, bodyLength, string(r.StatusLine))
 }
 
-func (r *Response) ReadConn(conn net.Conn) (resp []byte, err error) {
-	buf := new(bytes.Buffer)
-	resp = make([]byte, 1024)
+// ReadConn reads a complete HTTP response from the connection, handles gzip decoding and chunked transfer encoding if necessary.
+func (r *Response) ReadConn(conn net.Conn) ([]byte, error) {
+	defer conn.Close()
 
-	for {
-		nread, err := conn.Read(resp)
-		if err != nil {
-			break
-		}
-		if nread == 0 {
-			break
-		}
-		buf.Write(resp)
-		if nread < cap(resp) {
-			break
-		}
-	}
+	reader := bufio.NewReader(conn)
 
-	_, err = r.ReadFrom(buf)
+	// 读取并忽略状态行
+	_, err := reader.ReadString('\n')
 	if err != nil {
-		return resp, err
+		return nil, fmt.Errorf("failed to read status line: %w", err)
 	}
 
-	return resp, nil
+	// Read the headers
+	headers, err := readHeaders(reader)
+	if err != nil {
+		return nil, err
+	}
+	r.Headers = headers
+
+	// Check if the response is chunked
+	isChunked := strings.ToLower(r.Find("Transfer-Encoding")) == "chunked"
+
+	// Read the body
+	var body []byte
+	if isChunked {
+		body, err = readChunkedBody(reader)
+	} else {
+		body, err = io.ReadAll(reader)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	r.Body = body
+
+	// Check if we need to decompress the body
+	if strings.ToLower(r.Find("Content-Encoding")) == "gzip" {
+		gzReader, err := gzip.NewReader(bytes.NewReader(r.Body))
+		if err != nil {
+			return nil, err
+		}
+		defer gzReader.Close()
+		decompressed, err := io.ReadAll(gzReader)
+		if err != nil {
+			return nil, err
+		}
+		r.Body = decompressed
+	}
+
+	return r.Body, nil
+}
+
+// readHeaders reads the HTTP headers from the reader.
+func readHeaders(reader *bufio.Reader) ([]*HeaderKV, error) {
+	var headers []*HeaderKV
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			break
+		}
+		parts := strings.SplitN(line, ": ", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid header line: %s", line)
+		}
+		headers = append(headers, &HeaderKV{Key: []byte(parts[0]), Value: []byte(parts[1])})
+	}
+	return headers, nil
+}
+
+// readChunkedBody reads the body of a chunked transfer encoded response.
+func readChunkedBody(reader *bufio.Reader) ([]byte, error) {
+	var body bytes.Buffer
+	for {
+		chunkSizeLine, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		chunkSize, err := strconv.ParseUint(strings.TrimRight(chunkSizeLine, "\r\n"), 16, 64)
+		if err != nil {
+			return nil, err
+		}
+		if chunkSize == 0 {
+			break
+		}
+		chunk := make([]byte, chunkSize)
+		_, err = io.ReadFull(reader, chunk)
+		if err != nil {
+			return nil, err
+		}
+		body.Write(chunk)
+		// Read the trailing newline after the chunk
+		_, err = reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+	}
+	return body.Bytes(), nil
+}
+
+// Helper method to find a header by key
+func (h *Response) Find(key string) string {
+	for _, header := range h.Headers {
+		if strings.ToLower(string(header.Key)) == strings.ToLower(key) {
+			return string(header.Value)
+		}
+	}
+	return ""
 }

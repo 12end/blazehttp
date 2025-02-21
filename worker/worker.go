@@ -217,12 +217,12 @@ func (w *Worker) runWorker() {
 			req.CalculateContentLength()
 
 			start := time.Now()
-			conn := blazehttp.Connect(w.addr, w.isHttps, w.timeout)
+			conn, err := blazehttp.Connect(w.addr, w.isHttps, w.timeout)
 			if conn == nil {
 				job.Result.Err = fmt.Sprintf("connect to %s failed!\n", w.addr)
 				return
 			}
-			nWrite, err := req.WriteTo(*conn)
+			nWrite, err := req.WriteTo(conn)
 			if err != nil {
 				job.Result.Err = fmt.Sprintf("send request poc: %s length: %d error: %s", filePath, nWrite, err)
 				return
@@ -230,12 +230,12 @@ func (w *Worker) runWorker() {
 
 			rsp := new(blazehttp.Response)
 			var resp []byte
-			if resp, err = rsp.ReadConn(*conn); err != nil {
+			if resp, err = rsp.ReadConn(conn); err != nil {
 				job.Result.Err = fmt.Sprintf("read poc file: %s response, error: %s", filePath, err)
 				return
 			}
 			elap := time.Since(start).Nanoseconds()
-			(*conn).Close()
+			conn.Close()
 			job.Result.Success = true
 			if strings.HasSuffix(job.FilePath, "white") {
 				job.Result.IsWhite = true // white case
