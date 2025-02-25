@@ -68,6 +68,8 @@ func main() {
 	}
 	if blockRegexp == "" {
 		isWaf, blockStatusCode, err = utils.GetWafBlockStatusCode(target, mHost)
+		fmt.Println("isWaf:", isWaf)
+		fmt.Println("blockStatusCode:", blockStatusCode)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -80,11 +82,11 @@ func main() {
 		// 维持默认，优先匹配blockRegexp，status_code将不被用来匹配
 		isWaf = true
 		blockStatusCode = 403
-	}
-	blockKeyword, err = regexp.Compile(blockRegexp)
-	if err != nil {
-		fmt.Println("invalid block keyword regexp")
-		os.Exit(1)
+		blockKeyword, err = regexp.Compile(blockRegexp)
+		if err != nil {
+			fmt.Println("invalid block keyword regexp")
+			os.Exit(1)
+		}
 	}
 
 	fileList := make([]string, 0)
